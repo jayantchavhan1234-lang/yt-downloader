@@ -41,6 +41,21 @@ def progress_hook(session_id):
 def sanitize_filename(title):
     return re.sub(r'[\\/*?:"<>|]', "", title)[:100]
 
+# Common options to avoid bot detection
+def get_base_opts():
+    return {
+        'quiet': True,
+        'no_warnings': True,
+        'ignoreerrors': True,
+        'extractor_args': {
+            'youtube': {
+                'skip': ['hls', 'dash'],
+                'player_client': ['android', 'web'],  # Use android client to bypass bot check
+            }
+        },
+        'format_sort': ['res', 'ext'],
+    }
+
 @app.route('/api/health', methods=['GET'])
 def health_check():
     return jsonify({'status': 'running', 'nodejs_available': HAS_NODEJS})
@@ -52,9 +67,7 @@ def video_info():
     if not url:
         return jsonify({'error': 'No URL provided'}), 400
 
-    ydl_opts = {'quiet': True, 'no_warnings': True}
-    if HAS_NODEJS:
-        ydl_opts['compat_opts'] = ['no-youtube-unavailable-formats']
+    ydl_opts = get_base_opts()
     
     try:
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
@@ -95,19 +108,15 @@ def download():
     download_dir = tempfile.mkdtemp()
     
     try:
-        with yt_dlp.YoutubeDL({'quiet': True}) as ydl:
+        with yt_dlp.YoutubeDL(get_base_opts()) as ydl:
             info = ydl.extract_info(url, download=False)
             title = sanitize_filename(info.get('title', 'video'))
         
         base_opts = {
+            **get_base_opts(),
             'outtmpl': os.path.join(download_dir, '%(title)s.%(ext)s'),
-            'quiet': True,
-            'no_warnings': True,
             'progress_hooks': [progress_hook(session_id)],
         }
-        
-        if HAS_NODEJS:
-            base_opts['compat_opts'] = ['no-youtube-unavailable-formats']
         
         if mode == 'video':
             ydl_opts = {
@@ -161,7 +170,10 @@ def download():
         return response
         
     except Exception as e:
-        return jsonify({'error': str(e)}), 500
+        error_msg = str(e)
+        if "Sign in to confirm" in error_msg or "bot" in error_msg.lower():
+            error_msg = "YouTube bot protection triggered. Please try a different video or wait a few minutes."
+        return jsonify({'error': error_msg}), 500
 
 @app.route('/api/progress/<session_id>')
 def get_progress(session_id):
@@ -170,4 +182,5 @@ def get_progress(session_id):
 
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))
+    print(f"✅ Node.js available: {HAS_NODEJS}")
     app.run(host='0.0.0.0', port=port)
